@@ -369,6 +369,18 @@ const ICONS = {
 };
 const svgIcon = (type) => { const [, d] = ICONS[type] || ICONS.link; return `<svg viewBox="0 0 24 24" aria-hidden="true"${type === 'roblox' ? ' fill-rule="evenodd"' : ''}><path d="${d}"/></svg>`; };
 
+/* Opens a link in a new tab, always. Some browsers (and in-app browsers) ignore target="_blank",
+   so we open the tab ourselves; the page stays where it is. If a new tab isn't allowed, go there. */
+function newTab(a) {
+  a.target = '_blank'; a.rel = 'noopener noreferrer';
+  a.addEventListener('click', (e) => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return; // let the browser handle its own shortcuts
+    e.preventDefault();
+    const w = window.open(a.href, '_blank');
+    if (w) w.opener = null; else location.href = a.href;
+  });
+}
+
 function buildLinks() {
   const nav = $('#links');
   for (const l of B.links || []) {
@@ -376,7 +388,7 @@ function buildLinks() {
     const a = document.createElement(l.copy ? 'button' : 'a');
     a.className = 'tile'; a.dataset.fx = fx;
     if (l.copy) { a.type = 'button'; a.addEventListener('click', () => copy(l.copy, `${l.label || 'Copied'} · ${l.copy}`)); }
-    else { a.href = l.url; a.target = '_blank'; a.rel = 'noopener'; }
+    else { a.href = l.url; newTab(a); }
     a.setAttribute('aria-label', l.label || l.type);
     a.innerHTML = svgIcon(l.type) + `<span class="tip"></span>`;
     a.querySelector('.tip').textContent = l.label || l.type;
@@ -386,7 +398,7 @@ function buildLinks() {
   const box = $('#buttons');
   for (const b of B.buttons || []) {
     const a = document.createElement('a');
-    a.className = 'btn'; a.href = b.url; a.target = '_blank'; a.rel = 'noopener';
+    a.className = 'btn'; a.href = b.url; newTab(a);
     a.innerHTML = `<span class="ico">${svgIcon(b.icon || 'link')}</span><span class="txt"><b></b><small></small></span><svg class="arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>`;
     a.querySelector('b').textContent = b.label;
     a.querySelector('small').textContent = b.sub || '';
@@ -465,7 +477,7 @@ function tilt() {
    ==================================================================================== */
 const Hands = (() => {
   const cv = $('#hands'), ctx = cv.getContext('2d');
-  const RAMP = ' .:-=+*#%';
+  const SKIN = '  ..,::;+'; // engraving-style shading: mostly dots, so the outline carries the shape
   let W, H, cw, chh, font;
 
   function setup() {
@@ -473,7 +485,7 @@ const Hands = (() => {
     W = innerWidth; H = innerHeight;
     cv.width = W * dpr; cv.height = H * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    font = W < 600 ? 7 : 8;
+    font = W < 600 ? 6 : 7;
     ctx.font = `${font}px "JetBrains Mono", Consolas, monospace`;
     ctx.textBaseline = 'top';
     cw = ctx.measureText('M').width; chh = Math.round(font * 1.15);
@@ -493,68 +505,93 @@ const Hands = (() => {
   const smin = (a, b, k) => { const h = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k)); return b + (a - b) * h - k * h * (1 - h); };
 
   // one hand in its own units (1 = hand size); x points toward the card, y down. g = grip 0..1
+  // back of the hand, raised knuckles, four three-joint fingers that taper and curl over the
+  // card's edge, a jointed thumb, then a wrist, a suit cuff and a sleeve going off screen
+  const FINGERS = [[-0.27, 0.92], [-0.09, 1], [0.09, 0.95], [0.26, 0.78]]; // y, length
   function hand(x, y, g) {
-    const curl = 0.07 * g;
-    const palm = roundBox(x, y, -0.52, 0.02, 0.3, 0.36, 0.16);
-    const arm = capsule(x, y, -0.75, 0.08, -2.6, 0.2, 0.2); // comes in level from the side of the screen
-    const fingers = [
-      [-0.28, 0.08, 0.13], // y, reach, curl
-      [-0.095, 0.15, 0.16],
-      [0.09, 0.12, 0.15],
-      [0.27, 0.02, 0.11],
-    ].map(([fy, reach, c]) => Math.min(
-      capsule(x, y, -0.3, fy, 0.0 + reach * 0.5, fy - 0.015, 0.072),
-      capsule(x, y, 0.0 + reach * 0.5, fy - 0.015, 0.06 + reach, fy + c + curl, 0.066),
-    ));
-    const thumb = Math.min(capsule(x, y, -0.5, -0.3, -0.2, -0.52, 0.085), capsule(x, y, -0.2, -0.52, -0.02, -0.5 + curl, 0.075));
-    let f = Math.min(...fingers);
-    const sorted = [...fingers].sort((a, b) => a - b);
-    const crease = sorted[1] - sorted[0] < 0.02 && sorted[0] < 0;
-    const body = smin(smin(palm, arm, 0.12), thumb, 0.06);
-    return { d: smin(body, f, 0.05), crease };
+    const curl = 0.08 * g;
+    const palm = roundBox(x, y, -0.5, 0.03, 0.29, 0.35, 0.17);
+    const wrist = capsule(x, y, -0.74, 0.06, -1.0, 0.08, 0.2);
+    let knuckles = 9, fingers = 9, second = 9;
+    for (const [fy, l] of FINGERS) {
+      knuckles = Math.min(knuckles, len(x + 0.24, y - fy) - 0.088);
+      const ax = -0.24, mx1 = -0.24 + 0.24 * l, mx2 = mx1 + 0.14 * l, tx = mx2 + 0.05 * l;
+      const f = Math.min(
+        capsule(x, y, ax, fy, mx1, fy - 0.012, 0.074),
+        capsule(x, y, mx1, fy - 0.012, mx2, fy + 0.02 + curl * 0.4, 0.067),
+        capsule(x, y, mx2, fy + 0.02 + curl * 0.4, tx, fy + 0.1 + curl, 0.058),
+      );
+      if (f < fingers) { second = fingers; fingers = f; } else if (f < second) second = f;
+    }
+    const thumb = Math.min(
+      capsule(x, y, -0.56, -0.27, -0.32, -0.45, 0.092),
+      capsule(x, y, -0.32, -0.45, -0.1, -0.48, 0.079),
+      capsule(x, y, -0.1, -0.48, 0.0, -0.42 + curl * 0.6, 0.068),
+    );
+    const cuff = capsule(x, y, -1.0, 0.08, -1.2, 0.09, 0.245);
+    const sleeve = capsule(x, y, -1.2, 0.09, -3.0, 0.22, 0.27);
+    const skin = smin(smin(smin(palm, knuckles, 0.06), wrist, 0.1), thumb, 0.05);
+    const handD = smin(skin, fingers, 0.035);
+    const d = Math.min(handD, cuff, sleeve);
+    const part = d === sleeve ? 'sleeve' : d === cuff ? 'cuff' : 'skin';
+    return { d, part, crease: second - fingers < 0.022 && fingers < 0 && part === 'skin' };
   }
 
   // draws one hand gripping at (gx, gy); side = -1 left (hand on the left, reaching right), +1 right
-  function drawHand(cells, gx, gy, S, side, g, alpha) {
-    const L = [-0.55, -0.6, 0.58];
-    const x0 = gx + (side < 0 ? -2.5 * S : -0.35 * S), x1 = gx + (side < 0 ? 0.35 * S : 2.5 * S);
-    const y0 = gy - 0.75 * S, y1 = gy + 1.1 * S;
+  function drawHand(cells, mask, gx, gy, S, side, g, alpha) {
+    const L = [-0.5, -0.62, 0.6];
+    const x0 = gx + (side < 0 ? -3.0 * S : -0.35 * S), x1 = gx + (side < 0 ? 0.35 * S : 3.0 * S);
+    const y0 = gy - 0.7 * S, y1 = gy + 0.62 * S;
     const c0 = Math.max(0, Math.floor(x0 / cw)), c1 = Math.min(Math.ceil(W / cw), Math.ceil(x1 / cw));
     const r0 = Math.max(0, Math.floor(y0 / chh)), r1 = Math.min(Math.ceil(H / chh), Math.ceil(y1 / chh));
-    const e = 0.012;
+    const e = 0.01;
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
       const px = c * cw + cw / 2, py = r * chh + chh / 2;
       const lx = ((px - gx) / S) * -side, ly = (py - gy) / S; // mirror so fingers always point at the card
-      const { d, crease } = hand(lx, ly, g);
-      if (d > 0.004) continue;
+      const { d, part, crease } = hand(lx, ly, g);
+      if (d > 0.006) continue;
+      const fade = alpha * Math.max(0, Math.min(1, (lx + 2.85) / 0.9)); // the sleeve dissolves into the dark
+      if (fade < 0.02) continue;
+      mask.push([c, r, fade]);
       const nxL = hand(lx + e, ly, g).d - hand(lx - e, ly, g).d, ny = hand(lx, ly + e, g).d - hand(lx, ly - e, g).d;
       const nx = nxL * -side; // back to screen direction
-      const gl = Math.hypot(nx, ny) || 1;
+      const gl = Math.hypot(nx, ny) || 1, ux = nx / gl, uy = ny / gl;
+      // light on a rounded surface: flat in the middle, turning away near the edge
+      const depth = Math.min(1, -d / 0.15), k = (1 - depth) * 0.95;
+      const n3 = [ux * k, uy * k, depth + 0.3], nl = Math.hypot(n3[0], n3[1], n3[2]);
+      const lam = Math.max(0, (n3[0] * L[0] + n3[1] * L[1] + n3[2] * L[2]) / nl);
       let ch, v;
-      if (d > -0.03) { // outline: a character that follows the edge
-        const ax = Math.abs(nx / gl), ay = Math.abs(ny / gl);
-        ch = ay > 0.85 ? '-' : ax > 0.85 ? '|' : (nx > 0) === (ny > 0) ? '\\' : '/';
-        if (ay > 0.85 && ny < 0) ch = '_';
-        v = 0.95;
+      if (d > -0.026) { // outline: a character that follows the edge
+        const ax = Math.abs(ux), ay = Math.abs(uy);
+        ch = ay > 0.88 ? (uy < 0 ? '_' : '-') : ax > 0.88 ? '|' : (ux > 0) === (uy > 0) ? '\\' : '/';
+        v = part === 'sleeve' ? 0.6 : 0.95;
+      } else if (part === 'cuff') {
+        const cx = lx + 1.1;
+        if (Math.abs(cx) < 0.035 && Math.abs(ly - 0.09) < 0.05) { ch = '*'; v = 1; } // star cufflink
+        else if (lx > -1.035 || lx < -1.175) { ch = '|'; v = 0.75; } // cuff seams
+        else { ch = (r % 2) ? '-' : ' '; v = 0.3 + lam * 0.4; }
+      } else if (part === 'sleeve') {
+        const m = ((c - r) % 4 + 4) % 4; // diagonal weave
+        ch = m === 0 ? '/' : m === 2 ? '.' : ' ';
+        v = 0.22 + lam * 0.4;
       } else {
-        const depth = Math.min(1, -d / 0.16);
-        const k = (1 - depth) * 0.9;
-        const n3 = [(nx / gl) * k, (ny / gl) * k, depth + 0.25];
-        const nl = Math.hypot(...n3);
-        const lam = Math.max(0, (n3[0] * L[0] + n3[1] * L[1] + n3[2] * L[2]) / nl);
-        v = 0.12 + lam * 0.85;
-        if (crease) v *= 0.35;
-        ch = RAMP[Math.max(1, Math.min(RAMP.length - 1, Math.round(v * (RAMP.length - 1))))];
+        v = 0.15 + lam * 0.8;
+        // between fingers: a fine line, so each finger reads on its own
+        ch = crease ? (Math.abs(uy) > Math.abs(ux) ? '_' : '|') : SKIN[Math.max(0, Math.min(SKIN.length - 1, Math.round(v * (SKIN.length - 1))))];
+        if (crease) v = 0.7;
       }
-      const fadeArm = Math.max(0, Math.min(1, (lx + 2.2) / 1.1)); // the forearm dissolves into the dark
-      cells.push([c, r, ch, v * alpha * fadeArm]);
+      if (ch !== ' ') cells.push([c, r, ch, v * fade]);
     }
   }
 
-  function draw(cells) {
+  function draw(cells, mask) {
     ctx.clearRect(0, 0, W, H);
+    // the hands hide the stars behind them, so their shape stays clean
+    ctx.fillStyle = '#050507';
+    for (const [c, r, a] of mask) { ctx.globalAlpha = Math.min(1, a * 1.1); ctx.fillRect(c * cw - 0.5, r * chh - 0.5, cw + 1, chh + 1); }
+    ctx.globalAlpha = 1;
     const buckets = Array.from({ length: 10 }, () => []);
-    for (const cell of cells) buckets[Math.min(9, Math.floor(cell[3] * 10))].push(cell);
+    for (const cell of cells) buckets[Math.max(0, Math.min(9, Math.floor(cell[3] * 10)))].push(cell);
     buckets.forEach((list, l) => {
       if (!list.length) return;
       ctx.fillStyle = `rgba(236,239,250,${((l + 0.5) / 10).toFixed(2)})`;
@@ -571,7 +608,7 @@ const Hands = (() => {
     setup();
     const rect = card.getBoundingClientRect();
     const cx = rect.left + rect.width / 2, half = rect.width / 2;
-    const S = Math.min(rect.height * 0.3, W < 600 ? 96 : 150);
+    const S = Math.min(rect.height * 0.32, W < 600 ? 104 : 168);
     const slit = Math.min(half * 0.32, S * 0.55); // the card arrives as a narrow slit the hands can grip
     const gyL = rect.top + rect.height * 0.42, gyR = rect.top + rect.height * 0.58;
     card.style.clipPath = 'inset(0 50% 0 50% round 18px)';
@@ -586,7 +623,7 @@ const Hands = (() => {
         // where the card's edges are right now
         const open = (slit + pPull * (half - slit)) * pEnter;
         card.style.clipPath = `inset(0 ${(50 - (open / rect.width) * 100).toFixed(2)}% 0 ${(50 - (open / rect.width) * 100).toFixed(2)}% round 18px)`;
-        const cells = [];
+        const cells = [], mask = [];
         // the two edges of the slit glow while the hands hold it
         const seamA = clamp01((ms - 250) / 500) * (1 - pPull * 0.9);
         if (seamA > 0.01) {
@@ -606,8 +643,8 @@ const Hands = (() => {
         const g = pGrip * (1 - pLeave);
         const alpha = 1 - pLeave;
         if (alpha > 0.01) {
-          drawHand(cells, lx - 3, gyL + shake, S, -1, g, alpha);
-          drawHand(cells, rx + 3, gyR - shake, S, 1, g, alpha);
+          drawHand(cells, mask, lx - 3, gyL + shake, S, -1, g, alpha);
+          drawHand(cells, mask, rx + 3, gyR - shake, S, 1, g, alpha);
         }
         // a few sparks fly off the edges while it opens
         if (pPull > 0 && pPull < 1) for (let k = 0; k < 4; k++) {
@@ -615,7 +652,7 @@ const Hands = (() => {
           cells.push([Math.round((cx - open) / cw) - 1 - Math.round(Math.random() * 2), Math.round(sy / chh), '*+.'[k % 3], 0.6]);
           cells.push([Math.round((cx + open) / cw) + 1 + Math.round(Math.random() * 2), Math.round(sy / chh), '*+.'[k % 3], 0.6]);
         }
-        draw(cells);
+        draw(cells, mask);
     };
     // ?pose=1600 freezes the opening at that moment (for checking the drawing)
     const pose = Number(new URLSearchParams(location.search).get('pose'));
