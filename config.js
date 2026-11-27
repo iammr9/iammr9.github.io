@@ -11,7 +11,7 @@ window.BIO = {
   // small icon tiles. type: discord, tiktok, youtube, instagram, facebook, x, roblox, github, twitch, spotify
   // copy: 'text' copies that text instead of opening a link (handy for a Discord username)
   links: [
-    { type: 'discord', label: 'Stellar Discord', url: 'https://discord.gg/nfPXqWgYW' },
+    { type: 'discord', label: 'Discord', url: 'https://discord.com/users/561483901940531220' },
     { type: 'tiktok', label: 'TikTok', url: 'https://www.tiktok.com/@_iammr9' },
     { type: 'youtube', label: 'YouTube', url: 'https://www.youtube.com/@Mr9real' },
     { type: 'instagram', label: 'Instagram', url: 'https://www.instagram.com/kao_chaimongkol/' },
