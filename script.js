@@ -469,15 +469,18 @@ function tilt() {
 }
 
 /* ====================================================================================
-   The hands: two ASCII hands, shaded like the planet, glide in holding a thin seam of
-   light, grip it and pull the card open from the middle, then let go and drift away.
-   Each hand is a signed-distance shape (wrist, palm, four fingers, thumb); every
-   character cell inside it gets a shade from its depth and the light, and the outline
-   gets a character that follows its slope.
+   The hands: two realistic ASCII hands glide in, take hold of the card's edges, pull it
+   open from the middle, then let go and drift away.
+   Each hand is first painted as a small greyscale picture (forearm, back of the hand with
+   knuckles and tendons, four jointed fingers with nails, a thumb), lit from above. That
+   picture is then turned into characters, like ASCII photo art: brightness picks the
+   character, and the edge of the hand gets characters that follow its outline.
+   Painting and converting happen once; animating only moves the finished characters.
    ==================================================================================== */
 const Hands = (() => {
   const cv = $('#hands'), ctx = cv.getContext('2d');
-  const SKIN = '  ..,::;+'; // engraving-style shading: mostly dots, so the outline carries the shape
+  const RAMP = ' .,-~:;=!*#$@'; // dark -> bright
+  const MIRROR = { '/': '\\', '\\': '/', '(': ')', ')': '(', '<': '>', '>': '<' };
   let W, H, cw, chh, font;
 
   function setup() {
@@ -485,103 +488,228 @@ const Hands = (() => {
     W = innerWidth; H = innerHeight;
     cv.width = W * dpr; cv.height = H * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    font = W < 600 ? 6 : 7;
+    font = W < 600 ? 5 : 6;
     ctx.font = `${font}px "JetBrains Mono", Consolas, monospace`;
     ctx.textBaseline = 'top';
     cw = ctx.measureText('M').width; chh = Math.round(font * 1.15);
   }
 
-  // signed distances (negative inside)
-  const len = (x, y) => Math.hypot(x, y);
-  function capsule(px, py, ax, ay, bx, by, r) {
-    const bax = bx - ax, bay = by - ay, pax = px - ax, pay = py - ay;
-    const h = Math.max(0, Math.min(1, (pax * bax + pay * bay) / (bax * bax + bay * bay)));
-    return len(pax - bax * h, pay - bay * h) - r;
-  }
-  function roundBox(px, py, cx, cy, hx, hy, r) {
-    const qx = Math.abs(px - cx) - hx + r, qy = Math.abs(py - cy) - hy + r;
-    return len(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
-  }
-  const smin = (a, b, k) => { const h = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k)); return b + (a - b) * h - k * h * (1 - h); };
+  /* ---------- painting one left hand (back of the hand toward us, fingers pointing right) ----------
+     Design units: the card's edge is at x = 128, the grip point is (128, 64). y grows downward.
+     Real proportions: fingers about as long as the back of the hand, knuckles staggered
+     (middle furthest forward), a wrist narrower than the hand, a forearm widening toward
+     the elbow. From the top: little finger, ring, middle, index; the thumb along the bottom. */
+  const GRIP = [128, 64];
+  const BOX = { x0: -84, x1: 190, y0: 18, y1: 128 };
+  const KNUCKLES = [[100, 42], [106, 55.5], [108.5, 69.5], [104.5, 83.5]]; // little, ring, middle, index
+  const WIDTHS = [11.6, 13.2, 14, 13.6];
+  const LENGTHS = [50, 62, 68, 62];
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const lp = (p, q, t) => [lerp(p[0], q[0], t), lerp(p[1], q[1], t)];
 
-  // one hand in its own units (1 = hand size); x points toward the card, y down. g = grip 0..1
-  // back of the hand, raised knuckles, four three-joint fingers that taper and curl over the
-  // card's edge, a jointed thumb, then a wrist, a suit cuff and a sleeve going off screen
-  const FINGERS = [[-0.27, 0.92], [-0.09, 1], [0.09, 0.95], [0.26, 0.78]]; // y, length
-  function hand(x, y, g) {
-    const curl = 0.08 * g;
-    const palm = roundBox(x, y, -0.5, 0.03, 0.29, 0.35, 0.17);
-    const wrist = capsule(x, y, -0.74, 0.06, -1.0, 0.08, 0.2);
-    let knuckles = 9, fingers = 9, second = 9;
-    for (const [fy, l] of FINGERS) {
-      knuckles = Math.min(knuckles, len(x + 0.24, y - fy) - 0.088);
-      const ax = -0.24, mx1 = -0.24 + 0.24 * l, mx2 = mx1 + 0.14 * l, tx = mx2 + 0.05 * l;
-      const f = Math.min(
-        capsule(x, y, ax, fy, mx1, fy - 0.012, 0.074),
-        capsule(x, y, mx1, fy - 0.012, mx2, fy + 0.02 + curl * 0.4, 0.067),
-        capsule(x, y, mx2, fy + 0.02 + curl * 0.4, tx, fy + 0.1 + curl, 0.058),
-      );
-      if (f < fingers) { second = fingers; fingers = f; } else if (f < second) second = f;
-    }
-    const thumb = Math.min(
-      capsule(x, y, -0.56, -0.27, -0.32, -0.45, 0.092),
-      capsule(x, y, -0.32, -0.45, -0.1, -0.48, 0.079),
-      capsule(x, y, -0.1, -0.48, 0.0, -0.42 + curl * 0.6, 0.068),
-    );
-    const cuff = capsule(x, y, -1.0, 0.08, -1.2, 0.09, 0.245);
-    const sleeve = capsule(x, y, -1.2, 0.09, -3.0, 0.22, 0.27);
-    const skin = smin(smin(smin(palm, knuckles, 0.06), wrist, 0.1), thumb, 0.05);
-    const handD = smin(skin, fingers, 0.035);
-    const d = Math.min(handD, cuff, sleeve);
-    const part = d === sleeve ? 'sleeve' : d === cuff ? 'cuff' : 'skin';
-    return { d, part, crease: second - fingers < 0.022 && fingers < 0 && part === 'skin' };
+  function fingerPts(i, g) {
+    const [kx, ky] = KNUCKLES[i], L = LENGTHS[i], fan = (ky - 63) * 0.045;
+    const a = 0.46 * L, b = 0.3 * L, c = 0.24 * L;
+    // a relaxed hand: fingers spread a little and curve gently, never ruler-straight
+    const open = [[kx, ky], [kx + a, ky + fan + L * 0.02], [kx + a + b * 0.98, ky + fan * 1.7 + L * 0.07], [kx + a + b + c * 0.94, ky + fan * 2.2 + L * 0.14]];
+    // holding the card: the first joint reaches over the edge, the rest bends toward us onto its face
+    const p1 = [128 + 2.5, ky + 1 + fan * 0.4];
+    const p2 = [p1[0] + b * 0.5, p1[1] + b * 0.42];
+    const p3 = [p2[0] + c * 0.3, p2[1] + c * 0.58];
+    return open.map((p, k) => lp(p, [[kx, ky], p1, p2, p3][k], g));
+  }
+  function thumbPts(g) {
+    const open = [[44, 76], [66, 92], [86, 101], [101, 104]];
+    const grip = [[44, 76], [67, 91], [88, 99], [104, 99]];
+    return open.map((p, k) => lp(p, grip[k], g));
   }
 
-  // draws one hand gripping at (gx, gy); side = -1 left (hand on the left, reaching right), +1 right
-  function drawHand(cells, mask, gx, gy, S, side, g, alpha) {
-    const L = [-0.5, -0.62, 0.6];
-    const x0 = gx + (side < 0 ? -3.0 * S : -0.35 * S), x1 = gx + (side < 0 ? 0.35 * S : 3.0 * S);
-    const y0 = gy - 0.7 * S, y1 = gy + 0.62 * S;
-    const c0 = Math.max(0, Math.floor(x0 / cw)), c1 = Math.min(Math.ceil(W / cw), Math.ceil(x1 / cw));
-    const r0 = Math.max(0, Math.floor(y0 / chh)), r1 = Math.min(Math.ceil(H / chh), Math.ceil(y1 / chh));
-    const e = 0.01;
-    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-      const px = c * cw + cw / 2, py = r * chh + chh / 2;
-      const lx = ((px - gx) / S) * -side, ly = (py - gy) / S; // mirror so fingers always point at the card
-      const { d, part, crease } = hand(lx, ly, g);
-      if (d > 0.006) continue;
-      const fade = alpha * Math.max(0, Math.min(1, (lx + 2.85) / 0.9)); // the sleeve dissolves into the dark
-      if (fade < 0.02) continue;
-      mask.push([c, r, fade]);
-      const nxL = hand(lx + e, ly, g).d - hand(lx - e, ly, g).d, ny = hand(lx, ly + e, g).d - hand(lx, ly - e, g).d;
-      const nx = nxL * -side; // back to screen direction
-      const gl = Math.hypot(nx, ny) || 1, ux = nx / gl, uy = ny / gl;
-      // light on a rounded surface: flat in the middle, turning away near the edge
-      const depth = Math.min(1, -d / 0.15), k = (1 - depth) * 0.95;
-      const n3 = [ux * k, uy * k, depth + 0.3], nl = Math.hypot(n3[0], n3[1], n3[2]);
-      const lam = Math.max(0, (n3[0] * L[0] + n3[1] * L[1] + n3[2] * L[2]) / nl);
-      let ch, v;
-      if (d > -0.026) { // outline: a character that follows the edge
-        const ax = Math.abs(ux), ay = Math.abs(uy);
-        ch = ay > 0.88 ? (uy < 0 ? '_' : '-') : ax > 0.88 ? '|' : (ux > 0) === (uy > 0) ? '\\' : '/';
-        v = part === 'sleeve' ? 0.6 : 0.95;
-      } else if (part === 'cuff') {
-        const cx = lx + 1.1;
-        if (Math.abs(cx) < 0.035 && Math.abs(ly - 0.09) < 0.05) { ch = '*'; v = 1; } // star cufflink
-        else if (lx > -1.035 || lx < -1.175) { ch = '|'; v = 0.75; } // cuff seams
-        else { ch = (r % 2) ? '-' : ' '; v = 0.3 + lam * 0.4; }
-      } else if (part === 'sleeve') {
-        const m = ((c - r) % 4 + 4) % 4; // diagonal weave
-        ch = m === 0 ? '/' : m === 2 ? '.' : ' ';
-        v = 0.22 + lam * 0.4;
-      } else {
-        v = 0.15 + lam * 0.8;
-        // between fingers: a fine line, so each finger reads on its own
-        ch = crease ? (Math.abs(uy) > Math.abs(ux) ? '_' : '|') : SKIN[Math.max(0, Math.min(SKIN.length - 1, Math.round(v * (SKIN.length - 1))))];
-        if (crease) v = 0.7;
+  // a rounded limb lit from above: soft dark rim, mid tone, highlight along the top
+  function limb(g, pts, widths) {
+    const passes = [[46, 1, 0], [96, 0.9, -0.03], [138, 0.76, -0.07], [172, 0.58, -0.12], [200, 0.4, -0.17], [222, 0.2, -0.22]];
+    for (const [tone, k, oy] of passes) {
+      g.strokeStyle = `rgb(${tone},${tone},${tone})`;
+      for (let i = 0; i < pts.length - 1; i++) {
+        g.lineWidth = lerp(widths[i], widths[i + 1], 0.5) * k;
+        g.beginPath();
+        g.moveTo(pts[i][0], pts[i][1] + oy * widths[i]);
+        g.lineTo(pts[i + 1][0], pts[i + 1][1] + oy * widths[i + 1]);
+        g.stroke();
       }
-      if (ch !== ' ') cells.push([c, r, ch, v * fade]);
     }
+  }
+  function crease(g, p, q, w) { // the fine folds over a finger joint
+    const dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy) || 1, nx = -dy / l, ny = dx / l;
+    g.strokeStyle = 'rgba(52,52,52,.55)'; g.lineWidth = 0.9;
+    for (const off of [-0.8, 0.9]) {
+      const ox = (dx / l) * off, oy = (dy / l) * off;
+      g.beginPath();
+      g.moveTo(p[0] + ox + nx * w * 0.28, p[1] + oy + ny * w * 0.28);
+      g.quadraticCurveTo(p[0] + ox + (dx / l) * 1.2, p[1] + oy + (dy / l) * 1.2, p[0] + ox - nx * w * 0.28, p[1] + oy - ny * w * 0.28);
+      g.stroke();
+    }
+  }
+  function nail(g, p, q, w) {
+    const a = Math.atan2(q[1] - p[1], q[0] - p[0]), segL = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    const nl = Math.min(segL * 0.62, w * 0.85), nw = w * 0.56;
+    g.save();
+    g.translate(lerp(p[0], q[0], 0.6), lerp(p[1], q[1], 0.6) - w * 0.05);
+    g.rotate(a);
+    g.beginPath();
+    g.ellipse(0, 0, nl / 2, nw / 2, 0, 0, Math.PI * 2);
+    const ng = g.createLinearGradient(0, -nw / 2, 0, nw / 2);
+    ng.addColorStop(0, 'rgb(242,242,242)'); ng.addColorStop(1, 'rgb(170,170,170)');
+    g.fillStyle = ng; g.fill();
+    g.strokeStyle = 'rgba(80,80,80,.8)'; g.lineWidth = 0.7; g.stroke();
+    g.restore();
+  }
+  function smoothBlob(g, pts) { // closed curve through points (midpoint quadratic smoothing)
+    g.beginPath();
+    const m = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const s = m(pts[pts.length - 1], pts[0]);
+    g.moveTo(s[0], s[1]);
+    for (let i = 0; i < pts.length; i++) { const n = m(pts[i], pts[(i + 1) % pts.length]); g.quadraticCurveTo(pts[i][0], pts[i][1], n[0], n[1]); }
+    g.closePath();
+  }
+
+  function paint(scale, gp) {
+    const wpx = Math.ceil((BOX.x1 - BOX.x0) * scale), hpx = Math.ceil((BOX.y1 - BOX.y0) * scale);
+    const raw = document.createElement('canvas');
+    raw.width = wpx; raw.height = hpx;
+    const g = raw.getContext('2d');
+    g.scale(scale, scale); g.translate(-BOX.x0, -BOX.y0);
+    g.lineCap = 'round'; g.lineJoin = 'round';
+
+    // forearm: widens toward the elbow, rounder on top, in shadow underneath
+    smoothBlob(g, [[-84, 38], [-30, 40], [14, 46], [34, 48], [34, 79], [14, 82], [-30, 90], [-84, 94]]);
+    const fa = g.createLinearGradient(0, 40, 0, 92);
+    fa.addColorStop(0, 'rgb(150,150,150)'); fa.addColorStop(0.25, 'rgb(208,208,208)'); fa.addColorStop(0.6, 'rgb(140,140,140)'); fa.addColorStop(1, 'rgb(50,50,50)');
+    g.fillStyle = fa; g.fill();
+
+    // thumb, growing out of the hand on the index side
+    const th = thumbPts(gp);
+    limb(g, th, [20, 17, 14.5, 12.5]);
+    crease(g, th[2], th[3], 14);
+    nail(g, th[2], th[3], 12.5);
+
+    // back of the hand: narrow at the wrist, widest across the knuckles
+    const back = [[28, 49], [46, 42], [70, 37], [90, 35], [101, 38], [108, 49], [111, 63], [110, 77], [106, 88], [88, 93], [62, 91], [42, 85], [28, 79]];
+    smoothBlob(g, back);
+    const grad = g.createLinearGradient(0, 35, 0, 93);
+    grad.addColorStop(0, 'rgb(200,200,200)'); grad.addColorStop(0.35, 'rgb(214,214,214)'); grad.addColorStop(0.75, 'rgb(150,150,150)'); grad.addColorStop(1, 'rgb(70,70,70)');
+    g.fillStyle = grad; g.fill();
+    const hl = g.createRadialGradient(72, 52, 2, 72, 52, 30);
+    hl.addColorStop(0, 'rgba(255,255,255,.22)'); hl.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = hl; smoothBlob(g, back); g.fill();
+    // tendons fanning from the wrist to each knuckle, each with a soft groove beside it
+    KNUCKLES.forEach(([kx, ky]) => {
+      const from = [36, 63 + (ky - 63) * 0.22];
+      g.strokeStyle = 'rgba(236,236,236,.3)'; g.lineWidth = 2.4;
+      g.beginPath(); g.moveTo(from[0], from[1]); g.quadraticCurveTo(70, lerp(from[1], ky, 0.5) - 1.5, kx - 6, ky); g.stroke();
+      g.strokeStyle = 'rgba(40,40,40,.18)'; g.lineWidth = 1.2;
+      g.beginPath(); g.moveTo(from[0], from[1] + 2.6); g.quadraticCurveTo(70, lerp(from[1], ky, 0.5) + 1.5, kx - 6, ky + 3.6); g.stroke();
+    });
+
+    // fingers: little finger first, so each lower finger slightly overlaps the one above
+    for (let i = 0; i < 4; i++) {
+      const p = fingerPts(i, gp), w = WIDTHS[i];
+      limb(g, p, [w, w * 0.92, w * 0.84, w * 0.76]);
+      crease(g, p[1], p[2], w * 0.92); crease(g, p[2], p[3], w * 0.84);
+      nail(g, p[2], p[3], w * 0.78);
+    }
+    // knuckles: a soft highlight and a little fold of skin behind each
+    KNUCKLES.forEach(([kx, ky], i) => {
+      const r = WIDTHS[i] * 0.6, k = g.createRadialGradient(kx, ky - 2, 0.5, kx, ky - 2, r);
+      k.addColorStop(0, 'rgba(250,250,250,.6)'); k.addColorStop(1, 'rgba(250,250,250,0)');
+      g.fillStyle = k; g.beginPath(); g.arc(kx, ky - 2, r, 0, Math.PI * 2); g.fill();
+    });
+
+    // a soft blend over the whole picture, so tones flow instead of banding
+    const pic = document.createElement('canvas');
+    pic.width = wpx; pic.height = hpx;
+    const pg = pic.getContext('2d');
+    pg.filter = `blur(${Math.max(0.6, scale * 0.45).toFixed(2)}px)`;
+    pg.drawImage(raw, 0, 0);
+    return pic;
+  }
+
+  /* ---------- picture -> characters ----------
+     Each character cell samples a 3x3 grid of the picture: coverage decides whether the cell
+     is part of the hand, brightness picks the character, and cells on the edge use a
+     character that follows the outline. Positions are relative to the grip point. */
+  function toCells(pic, scale) {
+    const data = pic.getContext('2d').getImageData(0, 0, pic.width, pic.height).data;
+    const pw = pic.width, ph = pic.height;
+    const at = (x, y) => {
+      x = Math.round(x); y = Math.round(y);
+      if (x < 0 || y < 0 || x >= pw || y >= ph) return [0, 0];
+      const i = (y * pw + x) * 4;
+      return [data[i] / 255, data[i + 3] / 255];
+    };
+    const gx = (GRIP[0] - BOX.x0) * scale, gy = (GRIP[1] - BOX.y0) * scale;
+    const out = [];
+    const c0 = Math.floor(-gx / cw), c1 = Math.ceil((pw - gx) / cw), r0 = Math.floor(-gy / chh), r1 = Math.ceil((ph - gy) / chh);
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+      const x0 = gx + c * cw, y0 = gy + r * chh;
+      let lum = 0, cov = 0;
+      for (let sy = 0; sy < 3; sy++) for (let sx = 0; sx < 3; sx++) {
+        const [l, a] = at(x0 + (sx + 0.5) * cw / 3, y0 + (sy + 0.5) * chh / 3);
+        lum += l * a; cov += a;
+      }
+      cov /= 9;
+      if (cov < 0.3) continue;
+      lum = lum / 9 / cov;
+      // the forearm fades into the dark toward the edge of the screen
+      const designX = (x0 + cw / 2) / scale + BOX.x0;
+      const fade = Math.max(0, Math.min(1, (designX + 26) / 46));
+      if (fade < 0.03) continue;
+      let ch, v;
+      if (cov < 0.82) {
+        const [, aL] = at(x0 - cw * 0.5, y0 + chh / 2), [, aR] = at(x0 + cw * 1.5, y0 + chh / 2);
+        const [, aU] = at(x0 + cw / 2, y0 - chh * 0.5), [, aD] = at(x0 + cw / 2, y0 + chh * 1.5);
+        const nx = aL - aR, ny = aU - aD, n = Math.hypot(nx, ny) || 1, ux = nx / n, uy = ny / n; // points out of the hand
+        const ax = Math.abs(ux), ay = Math.abs(uy);
+        ch = ay > 0.86 ? (uy < 0 ? '_' : '-') : ax > 0.86 ? (ux < 0 ? '(' : ')') : (ux > 0) === (uy > 0) ? '\\' : '/';
+        v = 0.5 + lum * 0.45;
+      } else {
+        const k = Math.max(1, Math.min(RAMP.length - 1, Math.round(lum * (RAMP.length - 1))));
+        ch = RAMP[k];
+        v = 0.18 + lum * 0.82;
+      }
+      out.push([c, r, ch, v * fade, fade]);
+    }
+    return out;
+  }
+
+  /* A prepared hand drawn once into its own small canvas (side -1 = left, +1 = right, mirrored
+     with the matching characters), so every frame only places two finished images. */
+  function sprite(hand, side) {
+    const list = hand.map(([c, r, ch, v, m]) => [side < 0 ? c : -c - 1, r, side < 0 ? ch : (MIRROR[ch] || ch), v, m]);
+    let c0 = Infinity, c1 = -Infinity, r0 = Infinity, r1 = -Infinity;
+    for (const [c, r] of list) { c0 = Math.min(c0, c); c1 = Math.max(c1, c); r0 = Math.min(r0, r); r1 = Math.max(r1, r); }
+    const dpr = Math.min(devicePixelRatio || 1, 2), w = (c1 - c0 + 1) * cw, h = (r1 - r0 + 1) * chh;
+    const img = document.createElement('canvas');
+    img.width = Math.ceil(w * dpr); img.height = Math.ceil(h * dpr);
+    const g = img.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.font = ctx.font; g.textBaseline = 'top';
+    // the hand hides the stars behind it, so its shape stays clean
+    g.fillStyle = '#050507';
+    for (const [c, r, , , m] of list) { g.globalAlpha = Math.min(1, m * 1.1); g.fillRect((c - c0) * cw - 0.5, (r - r0) * chh - 0.5, cw + 1, chh + 1); }
+    g.globalAlpha = 1;
+    const buckets = Array.from({ length: 10 }, () => []);
+    for (const cell of list) buckets[Math.max(0, Math.min(9, Math.floor(cell[3] * 10)))].push(cell);
+    buckets.forEach((b, l) => {
+      if (!b.length) return;
+      g.fillStyle = `rgba(236,239,250,${((l + 0.5) / 10).toFixed(2)})`;
+      for (const [c, r, ch] of b) g.fillText(ch, (c - c0) * cw, (r - r0) * chh);
+    });
+    return { img, c0, r0, w, h };
+  }
+  function place(sp, gx, gy, alpha) {
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(sp.img, (Math.round(gx / cw) + sp.c0) * cw, (Math.round(gy / chh) + sp.r0) * chh, sp.w, sp.h);
+    ctx.globalAlpha = 1;
   }
 
   function draw(cells, mask) {
@@ -608,55 +736,50 @@ const Hands = (() => {
     setup();
     const rect = card.getBoundingClientRect();
     const cx = rect.left + rect.width / 2, half = rect.width / 2;
-    const S = Math.min(rect.height * 0.32, W < 600 ? 104 : 168);
-    const slit = Math.min(half * 0.32, S * 0.55); // the card arrives as a narrow slit the hands can grip
-    const gyL = rect.top + rect.height * 0.42, gyR = rect.top + rect.height * 0.58;
+    const S = Math.min(rect.height * 0.42, W < 600 ? 112 : 210); // pixels per 100 design units
+    const scale = S / 100;
+    // three poses: open hand, closing, holding. Painted and converted once.
+    const poses = [0, 0.5, 1].map((gp) => { const h = toCells(paint(scale, gp), scale); return [sprite(h, -1), sprite(h, 1)]; });    const slit = Math.min(half * 0.34, S * 0.3); // the card arrives as a narrow slit the hands can hold
+    const gyL = rect.top + rect.height * 0.44, gyR = rect.top + rect.height * 0.56;
     card.style.clipPath = 'inset(0 50% 0 50% round 18px)';
     card.classList.add('opening');
-    const T = { enter: 900, grip: 350, pull: 1100, leave: 800 };
+    const T = { enter: 950, grip: 380, pull: 1150, leave: 800 };
     const total = T.enter + T.grip + T.pull + T.leave;
     const render = (ms) => {
-        const pEnter = out(clamp01(ms / T.enter));
-        const pGrip = clamp01((ms - T.enter) / T.grip);
-        const pPull = ease(clamp01((ms - T.enter - T.grip) / T.pull));
-        const pLeave = clamp01((ms - T.enter - T.grip - T.pull) / T.leave);
-        // where the card's edges are right now
-        const open = (slit + pPull * (half - slit)) * pEnter;
-        card.style.clipPath = `inset(0 ${(50 - (open / rect.width) * 100).toFixed(2)}% 0 ${(50 - (open / rect.width) * 100).toFixed(2)}% round 18px)`;
-        const cells = [], mask = [];
-        // the two edges of the slit glow while the hands hold it
-        const seamA = clamp01((ms - 250) / 500) * (1 - pPull * 0.9);
-        if (seamA > 0.01) {
-          const grow = out(clamp01((ms - 250) / 600));
-          const mid = rect.top + rect.height / 2, h2 = (rect.height / 2) * grow;
-          for (let y = mid - h2; y <= mid + h2; y += chh) for (const ex of [cx - open, cx + open]) {
-            cells.push([Math.round(ex / cw - 0.5), Math.round(y / chh), '|', seamA]);
-            cells.push([Math.round(ex / cw - 0.5) + (ex < cx ? -1 : 1), Math.round(y / chh), ':', seamA * 0.3]);
-          }
+      const pEnter = out(clamp01(ms / T.enter));
+      const pGrip = clamp01((ms - T.enter) / T.grip);
+      const pPull = ease(clamp01((ms - T.enter - T.grip) / T.pull));
+      const pLeave = clamp01((ms - T.enter - T.grip - T.pull) / T.leave);
+      // where the card's edges are right now
+      const open = (slit + pPull * (half - slit)) * pEnter;
+      const inset = (50 - (open / rect.width) * 100).toFixed(2);
+      card.style.clipPath = `inset(0 ${inset}% 0 ${inset}% round 18px)`;
+      const cells = [], mask = [];
+      // the two edges of the slit glow while the hands hold it
+      const seamA = clamp01((ms - 250) / 500) * (1 - pPull * 0.9);
+      if (seamA > 0.01) {
+        const grow = out(clamp01((ms - 250) / 600));
+        const mid = rect.top + rect.height / 2, h2 = (rect.height / 2) * grow;
+        for (let y = mid - h2; y <= mid + h2; y += chh) for (const ex of [cx - open, cx + open]) {
+          cells.push([Math.round(ex / cw - 0.5), Math.round(y / chh), '|', seamA]);
+          cells.push([Math.round(ex / cw - 0.5) + (ex < cx ? -1 : 1), Math.round(y / chh), ':', seamA * 0.3]);
         }
-        // hands: in from the sides, grip, pull with the edges, then let go and drift out
-        const away = out(pLeave) * S * 1.6;
-        const startOff = (W / 2) + S * 2.5;
-        const lx = (cx - open) - (1 - pEnter) * startOff - away;
-        const rx = (cx + open) + (1 - pEnter) * startOff + away;
-        const shake = pPull > 0 && pPull < 1 ? Math.sin(ms * 0.06) * 1.2 : 0;
-        const g = pGrip * (1 - pLeave);
-        const alpha = 1 - pLeave;
-        if (alpha > 0.01) {
-          drawHand(cells, mask, lx - 3, gyL + shake, S, -1, g, alpha);
-          drawHand(cells, mask, rx + 3, gyR - shake, S, 1, g, alpha);
-        }
-        // a few sparks fly off the edges while it opens
-        if (pPull > 0 && pPull < 1) for (let k = 0; k < 4; k++) {
-          const sy = rect.top + Math.random() * rect.height;
-          cells.push([Math.round((cx - open) / cw) - 1 - Math.round(Math.random() * 2), Math.round(sy / chh), '*+.'[k % 3], 0.6]);
-          cells.push([Math.round((cx + open) / cw) + 1 + Math.round(Math.random() * 2), Math.round(sy / chh), '*+.'[k % 3], 0.6]);
-        }
-        draw(cells, mask);
+      }
+      // hands: in from the sides, close on the edges, pull, then open and drift away
+      const away = out(pLeave) * S * 1.4;
+      const startOff = (W / 2) + S * 2.6;
+      const lx = (cx - open) - (1 - pEnter) * startOff - away;
+      const rx = (cx + open) + (1 - pEnter) * startOff + away;
+      const shake = pPull > 0 && pPull < 1 ? Math.sin(ms * 0.05) * 1 : 0;
+      const g = pGrip * (1 - clamp01(pLeave * 2.5));
+      const [left, right] = poses[g < 0.33 ? 0 : g < 0.75 ? 1 : 2];
+      const alpha = 1 - pLeave;
+      draw(cells, mask);
+      if (alpha > 0.01) { place(left, lx, gyL + shake, alpha); place(right, rx, gyR - shake, alpha); }
     };
     // ?pose=1600 freezes the opening at that moment (for checking the drawing)
-    const pose = Number(new URLSearchParams(location.search).get('pose'));
-    if (pose) { render(pose); return new Promise(() => {}); }
+    const freeze = Number(new URLSearchParams(location.search).get('pose'));
+    if (freeze) { render(freeze); return new Promise(() => {}); }
     return new Promise((resolve) => {
       const t0 = performance.now();
       const step = (now) => {
