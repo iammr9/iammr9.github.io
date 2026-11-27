@@ -30,6 +30,9 @@ a { color: inherit; text-decoration: none; }
 /* ============ sky ============ */
 #space { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(120% 90% at 50% 45%, transparent 45%, rgba(0,0,0,.65)); }
+/* the ASCII hands that open the card: drawn over everything for the few seconds they're needed */
+#hands { position: fixed; inset: 0; z-index: 15; width: 100%; height: 100%; pointer-events: none; }
+.card.opening { opacity: 1; visibility: visible; animation: none; }
 
 /* ============ gate: click to enter ============ */
 .gate { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; background: rgba(3,3,5,.86); transition: opacity .7s ease, visibility .7s; }

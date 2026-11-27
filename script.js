@@ -54,8 +54,7 @@ const Space = (() => {
   }
   const toCell = (px, py) => [px / cw, py / chh];
 
-  function sphere(cx, cy, R, rot, bands, glow) {
-    const L = [-0.62, -0.48, 0.62];
+  function sphere(cx, cy, R, rot, bands, glow, L = [-0.62, -0.48, 0.62]) {
     const c0 = Math.floor((cx - R) / cw), c1 = Math.ceil((cx + R) / cw), r0 = Math.floor((cy - R) / chh), r1 = Math.ceil((cy + R) / chh);
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
       const nx = (c * cw + cw / 2 - cx) / R, ny = (r * chh + chh / 2 - cy) / R, d2 = nx * nx + ny * ny;
@@ -100,6 +99,79 @@ const Space = (() => {
     }
   }
 
+  /* a milky way: a diagonal band of ASCII dust, recomputed a few times a second as it drifts */
+  const hash2 = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
+  function vnoise(x, y) {
+    const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    const a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+    return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+  }
+  let neb = null, nebAt = -1;
+  function nebula() {
+    if (!neb || neb.length !== cols * rows) neb = new Float32Array(cols * rows);
+    if (t - nebAt > 0.25) {
+      nebAt = t;
+      const diag = Math.hypot(cols, rows * (chh / cw));
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        // distance from the line bottom-left -> top-right, in roughly square units
+        const u = c / cols, v = r / rows;
+        const d = Math.abs(v - (0.95 - 0.85 * u)) * rows * (chh / cw) / diag;
+        const band = Math.exp(-((d / 0.13) ** 2));
+        if (band < 0.05) { neb[r * cols + c] = 0; continue; }
+        const n = vnoise(c * 0.07 + t * 0.06, r * 0.14) * 0.65 + vnoise(c * 0.19 - t * 0.04, r * 0.36) * 0.35;
+        neb[r * cols + c] = band * n;
+      }
+    }
+    for (let i = 0; i < neb.length; i++) {
+      const v = neb[i];
+      if (v < 0.3) continue;
+      const ch = v > 0.62 ? ':' : v > 0.48 ? ',' : v > 0.38 ? "'" : '.';
+      put(i % cols, Math.floor(i / cols), ch, Math.min(0.26, (v - 0.28) * 0.55));
+    }
+  }
+
+  /* constellations: dotted lines between named stars, like an old star chart */
+  const CONS = [
+    { at: [0.6, 0.08], small: [0.52, 0.035], nodes: [[0, 0], [1.1, 0.25], [2.2, 0.1], [3.3, 0.4], [3.6, 1.25], [4.9, 1.15], [4.8, 0.35]], edges: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 3]] },
+    { at: [0.06, 0.8], small: [0.06, 0.93], nodes: [[0, 0.7], [0.9, 0], [1.8, 0.55], [2.7, 0], [3.6, 0.7], [1.8, 1.5]], edges: [[0, 1], [1, 2], [2, 3], [3, 4], [2, 5]] },
+  ];
+  function constellations(small) {
+    const s = Math.min(W, H) * (small ? 0.05 : 0.045);
+    CONS.forEach((k, idx) => {
+      const [ax, ay] = small ? k.small : k.at;
+      const ox = W * ax - pmx * 10, oy = H * ay - pmy * 8;
+      const pts = k.nodes.map(([x, y]) => [(ox + x * s) / cw, (oy + y * s) / chh]);
+      for (const [a, b] of k.edges) {
+        const [x0, y0] = pts[a], [x1, y1] = pts[b];
+        const dx = x1 - x0, dy = y1 - y0, steps = Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)));
+        const slope = Math.abs(dy * chh) / (Math.abs(dx * cw) + 0.001);
+        const ch = slope < 0.4 ? '-' : slope > 2.5 ? '|' : (dx > 0) === (dy < 0) ? '/' : '\\';
+        for (let i = 1; i < steps; i++) if (i % 2) put(x0 + (dx * i) / steps, y0 + (dy * i) / steps, ch, 0.17);
+      }
+      pts.forEach(([x, y], i) => {
+        const tw = 0.6 + 0.4 * Math.sin(t * 1.3 + i * 1.7 + idx * 3);
+        put(x, y, i % 3 === 0 ? '*' : '+', 0.55 + tw * 0.45);
+      });
+    });
+  }
+
+  /* a slow comet every half minute or so, with a long fading tail */
+  let comet = null, nextComet = 9;
+  function comets(dt) {
+    nextComet -= dt;
+    if (!comet && nextComet <= 0 && !reduced) comet = { x: cols * (0.75 + Math.random() * 0.25), y: -2, life: 0 };
+    if (!comet) return;
+    comet.life += dt; comet.x -= dt * 7; comet.y += dt * 3.2;
+    const fade = Math.min(1, comet.life / 0.8, (9 - comet.life) / 1.5);
+    put(comet.x, comet.y, '@', fade); put(comet.x - 1, comet.y, '*', fade * 0.5); put(comet.x, comet.y + 1, '.', fade * 0.4);
+    for (let k = 1; k < 30; k++) {
+      const wob = Math.sin(k * 0.5 - t * 3) * 0.35;
+      put(comet.x + k * 1.15, comet.y - k * 0.5 + wob, k < 5 ? '=' : k < 12 ? '~' : k < 20 ? '-' : '.', fade * (1 - k / 30) * 0.75);
+    }
+    if (comet.life > 9) { comet = null; nextComet = 25 + Math.random() * 15; }
+  }
+
   function frame(now) {
     if (!running) return;
     requestAnimationFrame(frame);
@@ -109,8 +181,15 @@ const Space = (() => {
     pmx += (mx - pmx) * 0.06; pmy += (my - pmy) * 0.06;
     chars.fill(0); alphas.fill(0);
 
-    // galaxy, far away (moves least with the mouse)
     const small = W < 700;
+    nebula();
+    constellations(small);
+
+    // a crescent moon high on the right: lit from behind and to the side
+    const mR = Math.min(W, H) * (small ? 0.06 : 0.055);
+    sphere(W * (small ? 0.86 : 0.9) - pmx * 9, H * (small ? 0.05 : 0.13) - pmy * 6, mR, t * 0.02, 0, 1.25, [-0.93, -0.2, -0.05]);
+
+    // galaxy, far away (moves least with the mouse)
     const gs = Math.min(W, H) * (small ? 0.24 : 0.2);
     const left = (W - 440) / 2; // left edge of the card
     galaxy((small ? W * 0.26 : Math.min(left - gs * 0.55, W * 0.2)) - pmx * 6, H * (small ? 0.1 : 0.24) - pmy * 4, gs);
@@ -138,6 +217,8 @@ const Space = (() => {
     const mxp = px + Math.cos(mo) * mr, myp = py + Math.sin(mo) * mr * 0.32 - R * 0.15;
     const behind = Math.sin(mo) < 0, md2 = (mxp - px) ** 2 + (myp - py) ** 2;
     if (!(behind && md2 < R * R)) sphere(mxp, myp, R * 0.2, t * 0.5, 0, 0.95);
+
+    comets(dt);
 
     // shooting stars
     nextShot -= dt;
@@ -375,6 +456,184 @@ function tilt() {
   card.addEventListener('pointerleave', () => { tx = ty = 0; tg = 0; kick(); });
 }
 
+/* ====================================================================================
+   The hands: two ASCII hands, shaded like the planet, glide in holding a thin seam of
+   light, grip it and pull the card open from the middle, then let go and drift away.
+   Each hand is a signed-distance shape (wrist, palm, four fingers, thumb); every
+   character cell inside it gets a shade from its depth and the light, and the outline
+   gets a character that follows its slope.
+   ==================================================================================== */
+const Hands = (() => {
+  const cv = $('#hands'), ctx = cv.getContext('2d');
+  const RAMP = ' .:-=+*#%';
+  let W, H, cw, chh, font;
+
+  function setup() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    font = W < 600 ? 7 : 8;
+    ctx.font = `${font}px "JetBrains Mono", Consolas, monospace`;
+    ctx.textBaseline = 'top';
+    cw = ctx.measureText('M').width; chh = Math.round(font * 1.15);
+  }
+
+  // signed distances (negative inside)
+  const len = (x, y) => Math.hypot(x, y);
+  function capsule(px, py, ax, ay, bx, by, r) {
+    const bax = bx - ax, bay = by - ay, pax = px - ax, pay = py - ay;
+    const h = Math.max(0, Math.min(1, (pax * bax + pay * bay) / (bax * bax + bay * bay)));
+    return len(pax - bax * h, pay - bay * h) - r;
+  }
+  function roundBox(px, py, cx, cy, hx, hy, r) {
+    const qx = Math.abs(px - cx) - hx + r, qy = Math.abs(py - cy) - hy + r;
+    return len(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
+  }
+  const smin = (a, b, k) => { const h = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k)); return b + (a - b) * h - k * h * (1 - h); };
+
+  // one hand in its own units (1 = hand size); x points toward the card, y down. g = grip 0..1
+  function hand(x, y, g) {
+    const curl = 0.07 * g;
+    const palm = roundBox(x, y, -0.52, 0.02, 0.3, 0.36, 0.16);
+    const arm = capsule(x, y, -0.75, 0.08, -2.6, 0.2, 0.2); // comes in level from the side of the screen
+    const fingers = [
+      [-0.28, 0.08, 0.13], // y, reach, curl
+      [-0.095, 0.15, 0.16],
+      [0.09, 0.12, 0.15],
+      [0.27, 0.02, 0.11],
+    ].map(([fy, reach, c]) => Math.min(
+      capsule(x, y, -0.3, fy, 0.0 + reach * 0.5, fy - 0.015, 0.072),
+      capsule(x, y, 0.0 + reach * 0.5, fy - 0.015, 0.06 + reach, fy + c + curl, 0.066),
+    ));
+    const thumb = Math.min(capsule(x, y, -0.5, -0.3, -0.2, -0.52, 0.085), capsule(x, y, -0.2, -0.52, -0.02, -0.5 + curl, 0.075));
+    let f = Math.min(...fingers);
+    const sorted = [...fingers].sort((a, b) => a - b);
+    const crease = sorted[1] - sorted[0] < 0.02 && sorted[0] < 0;
+    const body = smin(smin(palm, arm, 0.12), thumb, 0.06);
+    return { d: smin(body, f, 0.05), crease };
+  }
+
+  // draws one hand gripping at (gx, gy); side = -1 left (hand on the left, reaching right), +1 right
+  function drawHand(cells, gx, gy, S, side, g, alpha) {
+    const L = [-0.55, -0.6, 0.58];
+    const x0 = gx + (side < 0 ? -2.5 * S : -0.35 * S), x1 = gx + (side < 0 ? 0.35 * S : 2.5 * S);
+    const y0 = gy - 0.75 * S, y1 = gy + 1.1 * S;
+    const c0 = Math.max(0, Math.floor(x0 / cw)), c1 = Math.min(Math.ceil(W / cw), Math.ceil(x1 / cw));
+    const r0 = Math.max(0, Math.floor(y0 / chh)), r1 = Math.min(Math.ceil(H / chh), Math.ceil(y1 / chh));
+    const e = 0.012;
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+      const px = c * cw + cw / 2, py = r * chh + chh / 2;
+      const lx = ((px - gx) / S) * -side, ly = (py - gy) / S; // mirror so fingers always point at the card
+      const { d, crease } = hand(lx, ly, g);
+      if (d > 0.004) continue;
+      const nxL = hand(lx + e, ly, g).d - hand(lx - e, ly, g).d, ny = hand(lx, ly + e, g).d - hand(lx, ly - e, g).d;
+      const nx = nxL * -side; // back to screen direction
+      const gl = Math.hypot(nx, ny) || 1;
+      let ch, v;
+      if (d > -0.03) { // outline: a character that follows the edge
+        const ax = Math.abs(nx / gl), ay = Math.abs(ny / gl);
+        ch = ay > 0.85 ? '-' : ax > 0.85 ? '|' : (nx > 0) === (ny > 0) ? '\\' : '/';
+        if (ay > 0.85 && ny < 0) ch = '_';
+        v = 0.95;
+      } else {
+        const depth = Math.min(1, -d / 0.16);
+        const k = (1 - depth) * 0.9;
+        const n3 = [(nx / gl) * k, (ny / gl) * k, depth + 0.25];
+        const nl = Math.hypot(...n3);
+        const lam = Math.max(0, (n3[0] * L[0] + n3[1] * L[1] + n3[2] * L[2]) / nl);
+        v = 0.12 + lam * 0.85;
+        if (crease) v *= 0.35;
+        ch = RAMP[Math.max(1, Math.min(RAMP.length - 1, Math.round(v * (RAMP.length - 1))))];
+      }
+      const fadeArm = Math.max(0, Math.min(1, (lx + 2.2) / 1.1)); // the forearm dissolves into the dark
+      cells.push([c, r, ch, v * alpha * fadeArm]);
+    }
+  }
+
+  function draw(cells) {
+    ctx.clearRect(0, 0, W, H);
+    const buckets = Array.from({ length: 10 }, () => []);
+    for (const cell of cells) buckets[Math.min(9, Math.floor(cell[3] * 10))].push(cell);
+    buckets.forEach((list, l) => {
+      if (!list.length) return;
+      ctx.fillStyle = `rgba(236,239,250,${((l + 0.5) / 10).toFixed(2)})`;
+      for (const [c, r, ch] of list) ctx.fillText(ch, c * cw, r * chh);
+    });
+  }
+
+  const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+  const out = (x) => 1 - Math.pow(1 - x, 3);
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
+  /** Plays the opening. The card is clipped from the middle and revealed as the hands pull. */
+  function open(card) {
+    setup();
+    const rect = card.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2, half = rect.width / 2;
+    const S = Math.min(rect.height * 0.3, W < 600 ? 96 : 150);
+    const slit = Math.min(half * 0.32, S * 0.55); // the card arrives as a narrow slit the hands can grip
+    const gyL = rect.top + rect.height * 0.42, gyR = rect.top + rect.height * 0.58;
+    card.style.clipPath = 'inset(0 50% 0 50% round 18px)';
+    card.classList.add('opening');
+    const T = { enter: 900, grip: 350, pull: 1100, leave: 800 };
+    const total = T.enter + T.grip + T.pull + T.leave;
+    const render = (ms) => {
+        const pEnter = out(clamp01(ms / T.enter));
+        const pGrip = clamp01((ms - T.enter) / T.grip);
+        const pPull = ease(clamp01((ms - T.enter - T.grip) / T.pull));
+        const pLeave = clamp01((ms - T.enter - T.grip - T.pull) / T.leave);
+        // where the card's edges are right now
+        const open = (slit + pPull * (half - slit)) * pEnter;
+        card.style.clipPath = `inset(0 ${(50 - (open / rect.width) * 100).toFixed(2)}% 0 ${(50 - (open / rect.width) * 100).toFixed(2)}% round 18px)`;
+        const cells = [];
+        // the two edges of the slit glow while the hands hold it
+        const seamA = clamp01((ms - 250) / 500) * (1 - pPull * 0.9);
+        if (seamA > 0.01) {
+          const grow = out(clamp01((ms - 250) / 600));
+          const mid = rect.top + rect.height / 2, h2 = (rect.height / 2) * grow;
+          for (let y = mid - h2; y <= mid + h2; y += chh) for (const ex of [cx - open, cx + open]) {
+            cells.push([Math.round(ex / cw - 0.5), Math.round(y / chh), '|', seamA]);
+            cells.push([Math.round(ex / cw - 0.5) + (ex < cx ? -1 : 1), Math.round(y / chh), ':', seamA * 0.3]);
+          }
+        }
+        // hands: in from the sides, grip, pull with the edges, then let go and drift out
+        const away = out(pLeave) * S * 1.6;
+        const startOff = (W / 2) + S * 2.5;
+        const lx = (cx - open) - (1 - pEnter) * startOff - away;
+        const rx = (cx + open) + (1 - pEnter) * startOff + away;
+        const shake = pPull > 0 && pPull < 1 ? Math.sin(ms * 0.06) * 1.2 : 0;
+        const g = pGrip * (1 - pLeave);
+        const alpha = 1 - pLeave;
+        if (alpha > 0.01) {
+          drawHand(cells, lx - 3, gyL + shake, S, -1, g, alpha);
+          drawHand(cells, rx + 3, gyR - shake, S, 1, g, alpha);
+        }
+        // a few sparks fly off the edges while it opens
+        if (pPull > 0 && pPull < 1) for (let k = 0; k < 4; k++) {
+          const sy = rect.top + Math.random() * rect.height;
+          cells.push([Math.round((cx - open) / cw) - 1 - Math.round(Math.random() * 2), Math.round(sy / chh), '*+.'[k % 3], 0.6]);
+          cells.push([Math.round((cx + open) / cw) + 1 + Math.round(Math.random() * 2), Math.round(sy / chh), '*+.'[k % 3], 0.6]);
+        }
+        draw(cells);
+    };
+    // ?pose=1600 freezes the opening at that moment (for checking the drawing)
+    const pose = Number(new URLSearchParams(location.search).get('pose'));
+    if (pose) { render(pose); return new Promise(() => {}); }
+    return new Promise((resolve) => {
+      const t0 = performance.now();
+      const step = (now) => {
+        const ms = now - t0;
+        render(ms);
+        if (ms < total) requestAnimationFrame(step);
+        else { ctx.clearRect(0, 0, W, H); card.style.clipPath = ''; cv.remove(); resolve(); }
+      };
+      requestAnimationFrame(step);
+    });
+  }
+  return { open };
+})();
+
 /* ==================================== intro ==================================== */
 async function gate() {
   const g = $('#gate'), el = $('#gateType'), caret = g.querySelector('.caret');
@@ -392,10 +651,14 @@ async function enter() {
   $('#gate').classList.add('out');
   Sound.start();
   const card = $('#card');
-  card.classList.add('in');
-  const settled = (e) => { if (e.target !== card) return; card.classList.add('live'); card.removeEventListener('animationend', settled); };
-  card.addEventListener('animationend', settled);
-  await sleep(550);
+  if (reduced) { card.classList.add('in', 'live'); $('#hands').remove(); }
+  else {
+    await sleep(250);
+    await Hands.open(card); // two ASCII hands pull the card open from the middle
+    card.classList.remove('opening');
+    card.classList.add('in', 'live');
+  }
+  await sleep(150);
   await type($('#name'), B.name || '', 80, $('#nameCaret'));
   setTimeout(() => $('#nameCaret').remove(), 900);
   $('#handle')?.classList.add('show');
